@@ -4,13 +4,12 @@ from _thread import *
 
 
 def proxy():
-    imgSub, attack = 0, 1
+    imgSub, attack = 0, 0
     try:
-        print("Starting up...")
         serverSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         serverSocket.bind(('', 8100))
         #serverSocket.bind((config['HOST_NAME'], config['BIND_PORT']))
-        serverSocket.listen(5)
+        serverSocket.listen(10)
         print("LOG: Proxy started up!")
     except Exception as err:
         print("ERROR: Could not initialize socket with client", err)
@@ -19,15 +18,12 @@ def proxy():
     while True:
         try:
             connection, _ = serverSocket.accept()
-
-            data = connection.recv(8192)
+            data = connection.recv(1024)
             start_new_thread(conn_string, (connection, data, imgSub, attack))
         except KeyboardInterrupt:
             serverSocket.close()
             print("Shutting down server!")
             sys.exit(1)
-
-    serverSocket.close()
 
 
 def conn_string(connection, data, imgSub, attack):
@@ -71,10 +67,12 @@ def conn_string(connection, data, imgSub, attack):
 
 def proxy_server(webserver, port, connection, data, imgSub, attack):
     try:
-        serverSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        serverSocket.connect((webserver, port))
-        serverSocket.send(data)
-        totalBytes = 0
+        clientSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        clientSocket.connect((webserver, port))
+        clientSocket.settimeout(1)
+        clientSocket.sendall(data)
+        # hardcoded size for attack reply
+        totalBytes = 0 if not attack else 127
 
         while True:
             if attack:
@@ -83,21 +81,39 @@ def proxy_server(webserver, port, connection, data, imgSub, attack):
                     """HTTP/1.0 200 OK\n""", 'iso-8859-1'))
                 connection.sendall(str.encode(
                     'Content-Type: text/html\n', 'iso-8859-1'))
-                connection.send(str.encode('\n'))
+                connection.sendall(str.encode('\n'))
                 connection.sendall(str.encode(HTML, 'iso-8859-1'))
                 print("LOG: You are under attack!")
                 break
 
-            reply = serverSocket.recv(8192)
+            reply = b''
+            try:
+                reply += clientSocket.recv(1024)
+            except socket.timeout:
+                print
 
             if len(reply) > 0:
                 contentType = reply.find(b"Content-Type: image")
 
                 if imgSub and contentType != -1:
-                    print("LOG: Substituting image")
+                    request = """GET http://ocna0.d2.comp.nus.edu.sg:50000/change.jpg HTTP/1.0\nHost ocna0.d2.comp.nus.edu.sg:50000\n"""
+                    imgSocket = socket.socket(
+                        socket.AF_INET, socket.SOCK_STREAM)
+                    imgSocket.connect(('ocna0.d2.comp.nus.edu.sg', 50000))
+                    imgSocket.settimeout(1)
+                    imgSocket.send(request.encode())
+
+                    reply = b''
+                    try:
+                        reply += imgSocket.recv(1024)
+                    except socket.timeout:
+                        print
+
+                    connection.send(reply)
+                    totalBytes += len(reply)
+                    imgSocket.close()
                     break
 
-                #print("reply", reply.decode('utf-8'))
                 connection.send(reply)
                 totalBytes += len(reply)
                 print("LOG: Reply of size {} received from {}".format(
@@ -106,13 +122,12 @@ def proxy_server(webserver, port, connection, data, imgSub, attack):
                 break
 
         print("LOG: Closing connection")
-        if not attack:
-            print("http://" + webserver.decode('utf-8'), totalBytes)
-        serverSocket.close()
+        print("http://" + webserver.decode('utf-8'), totalBytes)
+        clientSocket.close()
         connection.close()
     except Exception as err:
         print("ERROR: Could not forward request or reply", err)
-        serverSocket.close()
+        clientSocket.close()
         connection.close()
         sys.exit(1)
 

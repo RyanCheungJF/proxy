@@ -4,7 +4,7 @@ from _thread import *
 
 
 def proxy():
-    imgSub, attack = 0, 0
+    imgSub, attack = 1, 0
     try:
         serverSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         serverSocket.bind(('', 8100))
@@ -74,56 +74,46 @@ def proxy_server(webserver, port, connection, data, imgSub, attack):
         # hardcoded size for attack reply
         totalBytes = 0 if not attack else 127
 
-        while True:
-            if attack:
-                HTML = """<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Attack</title></head><body><p>You are being attacked.</p></body></html>"""
-                connection.sendall(str.encode(
-                    """HTTP/1.0 200 OK\n""", 'iso-8859-1'))
-                connection.sendall(str.encode(
-                    'Content-Type: text/html\n', 'iso-8859-1'))
-                connection.sendall(str.encode('\n'))
-                connection.sendall(str.encode(HTML, 'iso-8859-1'))
-                print("LOG: You are under attack!")
-                break
+        if attack:
+            HTML = """<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Attack</title></head><body><p>You are being attacked.</p></body></html>"""
+            connection.sendall(str.encode(
+                """HTTP/1.0 200 OK\n""", 'iso-8859-1'))
+            connection.sendall(str.encode(
+                'Content-Type: text/html\n', 'iso-8859-1'))
+            connection.sendall(str.encode('\n'))
+            connection.sendall(str.encode(HTML, 'iso-8859-1'))
+            print("LOG: You are under attack!")
+        else:
+            reply = clientSocket.recv(1024)
+            contentTypePosition = reply.find(b"Content-Type: image")
+            
+            if imgSub and contentTypePosition != -1:
+                clientSocket.close()
+                request = """GET http://ocna0.d2.comp.nus.edu.sg:50000/change.jpg HTTP/1.0\r\nHost: ocna0.d2.comp.nus.edu.sg:50000\r\n""".encode()
+                imgSocket = socket.socket(
+                    socket.AF_INET, socket.SOCK_STREAM)
+                imgSocket.connect(('ocna0.d2.comp.nus.edu.sg', 50000))
+                imgSocket.settimeout(1)
+                imgSocket.sendall(request)
 
-            reply = b''
-            try:
-                reply += clientSocket.recv(1024)
-            except socket.timeout:
-                print
-
-            if len(reply) > 0:
-                contentType = reply.find(b"Content-Type: image")
-
-                if imgSub and contentType != -1:
-                    request = """GET http://ocna0.d2.comp.nus.edu.sg:50000/change.jpg HTTP/1.0\nHost ocna0.d2.comp.nus.edu.sg:50000\n"""
-                    imgSocket = socket.socket(
-                        socket.AF_INET, socket.SOCK_STREAM)
-                    imgSocket.connect(('ocna0.d2.comp.nus.edu.sg', 50000))
-                    imgSocket.settimeout(1)
-                    imgSocket.send(request.encode())
-
-                    reply = b''
-                    try:
-                        reply += imgSocket.recv(1024)
-                    except socket.timeout:
-                        print
-
-                    connection.send(reply)
-                    totalBytes += len(reply)
+                reply = b''
+                try:
+                    reply += imgSocket.recv(1024)
+                except socket.timeout:
                     imgSocket.close()
-                    break
-
-                connection.send(reply)
-                totalBytes += len(reply)
-                print("LOG: Reply of size {} received from {}".format(
-                    len(reply), webserver))
             else:
-                break
+                try:
+                    reply += clientSocket.recv(1024)
+                except socket.timeout:
+                    pass
+            connection.sendall(reply)
+            print("LOG: Reply of size {} received from {}".format(
+                len(reply), webserver))
 
         print("LOG: Closing connection")
-        print("http://" + webserver.decode('utf-8'), totalBytes)
-        clientSocket.close()
+        #print("http://" + webserver.decode('utf-8'), totalBytes)
+        if clientSocket:
+            clientSocket.close()
         connection.close()
     except Exception as err:
         print("ERROR: Could not forward request or reply", err)

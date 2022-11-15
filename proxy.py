@@ -7,13 +7,14 @@ def proxy():
     """
     Sets up the client socket based on the user inputs
     """
-    imgSub, attack = 1, 0
+    #port, imgSub, attack = sys.argv[1], sys.argv[2], sys.argv[3]
+    #print(port, imgSub, attack)
+    imgSub, attack = 0, 0
     try:
         clientSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        clientSocket.bind(('', 8100))
+        clientSocket.bind(('0.0.0.0', 8100))
         #clientSocket.bind((config['HOST_NAME'], config['BIND_PORT']))
         clientSocket.listen(10)
-        print("LOG: Proxy started up!")
     except Exception as err:
         print("ERROR: Could not initialize socket with client", err)
         sys.exit(2)
@@ -26,7 +27,6 @@ def proxy():
                              (connection, data, imgSub, attack))
         except KeyboardInterrupt:
             clientSocket.close()
-            print("Shutting down server!")
             sys.exit(1)
 
 
@@ -36,7 +36,7 @@ def receive_connection(connection, data, imgSub, attack):
     """
     try:
         # gets the first part without headers
-        # e.g b'CONNECT www.google.com:443 HTTP/1.1\r' (bytes format)
+        # GET http://ocna0.d2.comp.nus.edu.sg:50000/tc1/ HTTP/1.1\r\n
         dataWithoutHeaders = data.split(b"\n")[0]
         # obtains url
         fullUrl = dataWithoutHeaders.split(b" ")[1]
@@ -55,7 +55,6 @@ def receive_connection(connection, data, imgSub, attack):
             webserverPosition = len(url)
 
         if portPosition == -1 or webserverPosition < portPosition:
-            # probably should send 400?
             port = 80
             webserver = url[:webserverPosition]
         else:
@@ -63,11 +62,10 @@ def receive_connection(connection, data, imgSub, attack):
                        [:webserverPosition - portPosition - 1])
             webserver = url[:portPosition]
 
-        print("LOG: Request received for webserver {} and port {}".format(
-            webserver, port))
+        # to get content length back in reply
+        data = data.replace(b'HTTP/1.1', b'HTTP/1.0')
         proxy_server(webserver, port, connection, data, imgSub, attack)
     except Exception as err:
-        # check for delimiter of \r\n???
         connection.send(b'400 - Bad Request')
         print("ERROR: Could not parse request from client", err)
 
@@ -83,7 +81,6 @@ def send_attack(clientSocket, connection):
         'Content-Type: text/html\n', 'iso-8859-1'))
     connection.sendall(str.encode('\n'))
     connection.sendall(str.encode(HTML, 'iso-8859-1'))
-    print("LOG: You are under attack!")
     clientSocket.close()
     connection.close()
 
@@ -125,6 +122,7 @@ def read_reply(serverSocket, connection, webserver, imgSub):
     """
     Reads the reply from the server socket
     """
+    totalBytes = 0
     while True:
         reply = b''
         try:
@@ -133,6 +131,11 @@ def read_reply(serverSocket, connection, webserver, imgSub):
             pass
 
         if len(reply) > 0:
+            contentLengthPosition = reply.find(b'Content-Length')
+            if contentLengthPosition != -1:
+                contentLength = reply[contentLengthPosition +
+                                      16:].split(b'\r')[0]
+                totalBytes += int(contentLength.decode())
             # if image substitution enabled, make a new call to get it
             if imgSub and check_for_image(reply) != -1:
                 serverSocket.close()
@@ -140,11 +143,9 @@ def read_reply(serverSocket, connection, webserver, imgSub):
             else:
                 connection.sendall(reply)
                 #totalBytes += len(reply)
-                print("LOG: Reply of size {} received from {}".format(
-                    len(reply), webserver))
         else:
             break
-    return 111
+    return totalBytes
 
 
 def proxy_server(webserver, port, connection, data, imgSub, attack):

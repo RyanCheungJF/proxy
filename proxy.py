@@ -1,6 +1,6 @@
 import socket
 import sys
-from _thread import *
+from threading import Thread
 
 
 def proxy():
@@ -9,7 +9,7 @@ def proxy():
     """
     #port, imgSub, attack = sys.argv[1], sys.argv[2], sys.argv[3]
     #print(port, imgSub, attack)
-    imgSub, attack = 0, 0
+    imgSub, attack = 1, 0
     try:
         clientSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         clientSocket.bind(('0.0.0.0', 8100))
@@ -19,22 +19,47 @@ def proxy():
         print("ERROR: Could not initialize socket with client", err)
         sys.exit(2)
 
+    hashmap = {}
+    threads = []
+
     while True:
-        try:
-            connection, _ = clientSocket.accept()
-            data = connection.recv(1024)
-            start_new_thread(receive_connection,
-                             (connection, data, imgSub, attack))
-        except KeyboardInterrupt:
-            clientSocket.close()
-            sys.exit(1)
+        while True:
+            try:
+                connection, _ = clientSocket.accept()
+                data = connection.recv(1024)
+                thread = Thread(target=receive_connection, args=(
+                    connection, data, imgSub, attack, hashmap))
+                thread.start()
+                threads.append(thread)
+                clientSocket.settimeout(2)
+            except socket.timeout:
+                break
+
+            except KeyboardInterrupt:
+                clientSocket.close()
+                sys.exit(1)
+
+        for thread in threads:
+            # kills each thread and waits for them to terminate
+            thread.join()
+
+        if hashmap:
+            for key in hashmap:
+                print(f'http://{key.decode()}, {hashmap[key]}')
+
+        hashmap, threads = {}, []
 
 
-def receive_connection(connection, data, imgSub, attack):
+def receive_connection(connection, data, imgSub, attack, hashmap):
     """
     Receives a connection string and filters through its data
     """
     try:
+        # checks before parsing
+        # only dealing with HTTP 1 and GET
+        if (data.find(b'HTTP/1.0') and data.find(b'HTTP/1.1')) == -1 or data.find(b'GET') == -1:
+            raise Exception
+
         # gets the first part without headers
         # GET http://ocna0.d2.comp.nus.edu.sg:50000/tc1/ HTTP/1.1\r\n
         dataWithoutHeaders = data.split(b"\n")[0]
@@ -43,7 +68,6 @@ def receive_connection(connection, data, imgSub, attack):
 
         # getting rid of http in url
         httpPosition = fullUrl.find(b"://")
-        print("fullurl", fullUrl)
         url = fullUrl if httpPosition == -1 else fullUrl[httpPosition + 3:]
 
         portPosition = url.find(b":")
@@ -64,9 +88,11 @@ def receive_connection(connection, data, imgSub, attack):
 
         # to get content length back in reply
         data = data.replace(b'HTTP/1.1', b'HTTP/1.0')
-        proxy_server(webserver, port, connection, data, imgSub, attack)
+        proxy_server(webserver, port, connection,
+                     data, imgSub, attack, hashmap)
     except Exception as err:
-        connection.send(b'400 - Bad Request')
+        connection.send('HTTP/1.0 400: Bad Request\n'.encode())
+        connection.close()
         print("ERROR: Could not parse request from client", err)
 
 
@@ -104,6 +130,7 @@ def send_img_sub(connection):
     imgSocket.connect(('ocna0.d2.comp.nus.edu.sg', 50000))
     imgSocket.settimeout(1)
     imgSocket.send(request)
+    totalBytes = 0
 
     while True:
         reply = b''
@@ -113,12 +140,20 @@ def send_img_sub(connection):
             break
 
         if len(reply) > 0:
+            contentLengthPosition = reply.find(b'Content-Length')
+            if contentLengthPosition != -1:
+                contentLength = reply[contentLengthPosition +
+                                      16:].split(b'\r')[0]
+                totalBytes += int(contentLength.decode())
             connection.sendall(reply)
+        else:
+            break
 
     imgSocket.close()
+    return totalBytes
 
 
-def read_reply(serverSocket, connection, webserver, imgSub):
+def read_reply(serverSocket, connection, imgSub):
     """
     Reads the reply from the server socket
     """
@@ -139,16 +174,16 @@ def read_reply(serverSocket, connection, webserver, imgSub):
             # if image substitution enabled, make a new call to get it
             if imgSub and check_for_image(reply) != -1:
                 serverSocket.close()
-                send_img_sub(connection)
+                totalBytes = send_img_sub(connection)
+                break
             else:
                 connection.sendall(reply)
-                #totalBytes += len(reply)
         else:
             break
     return totalBytes
 
 
-def proxy_server(webserver, port, connection, data, imgSub, attack):
+def proxy_server(webserver, port, connection, data, imgSub, attack, hashmap):
     """
     Handles the requests from clients and replies from servers
     """
@@ -159,16 +194,16 @@ def proxy_server(webserver, port, connection, data, imgSub, attack):
         serverSocket.sendall(data)
         # hardcoded size for attack reply
         totalBytes = 0 if not attack else 127
+        hashmap[webserver] = hashmap.get(webserver, totalBytes)
 
         # if attack mode, we just want to send attack html
         if attack:
             send_attack(serverSocket, connection)
         else:
-            totalBytes = read_reply(
-                serverSocket, connection, webserver, imgSub)
+            bytesReceived = read_reply(
+                serverSocket, connection, imgSub)
+            hashmap[webserver] += bytesReceived
 
-        print("LOG: Closing connection")
-        print("http://" + webserver.decode('utf-8'), totalBytes)
         serverSocket.close()
         connection.close()
     except Exception as err:

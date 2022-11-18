@@ -7,16 +7,13 @@ def proxy():
     """
     Sets up the client socket based on the user inputs
     """
-    #port, imgSub, attack = sys.argv[1], sys.argv[2], sys.argv[3]
-    #print(port, imgSub, attack)
-    imgSub, attack = 1, 0
+    port, imgSub, attack = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3])
     try:
         clientSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        clientSocket.bind(('0.0.0.0', 8100))
-        #clientSocket.bind((config['HOST_NAME'], config['BIND_PORT']))
+        clientSocket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        clientSocket.bind(('192.168.51.86', port))
         clientSocket.listen(10)
     except Exception as err:
-        print("ERROR: Could not initialize socket with client", err)
         sys.exit(2)
 
     hashmap = {}
@@ -91,9 +88,14 @@ def receive_connection(connection, data, imgSub, attack, hashmap):
         proxy_server(webserver, port, connection,
                      data, imgSub, attack, hashmap)
     except Exception as err:
-        connection.send('HTTP/1.0 400: Bad Request\n'.encode())
+        HTML = """<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Bad Request</title></head><body><center><h1>400 - Bad Request</h1></center></body></html>"""
+        connection.sendall(str.encode(
+            """HTTP/1.0 400 - Bad Request\n""", 'iso-8859-1'))
+        connection.sendall(str.encode(
+            'Content-Type: text/html\n', 'iso-8859-1'))
+        connection.sendall(str.encode('\n'))
+        connection.sendall(str.encode(HTML, 'iso-8859-1'))
         connection.close()
-        print("ERROR: Could not parse request from client", err)
 
 
 def send_attack(clientSocket, connection):
@@ -141,7 +143,8 @@ def send_img_sub(connection):
 
         if len(reply) > 0:
             contentLengthPosition = reply.find(b'Content-Length')
-            if contentLengthPosition != -1:
+            validResPosition = reply.find(b'200 OK')
+            if contentLengthPosition != -1 and validResPosition != -1:
                 contentLength = reply[contentLengthPosition +
                                       16:].split(b'\r')[0]
                 totalBytes += int(contentLength.decode())
@@ -167,7 +170,8 @@ def read_reply(serverSocket, connection, imgSub):
 
         if len(reply) > 0:
             contentLengthPosition = reply.find(b'Content-Length')
-            if contentLengthPosition != -1:
+            validResPosition = reply.find(b'200 OK')
+            if contentLengthPosition != -1 and validResPosition != -1:
                 contentLength = reply[contentLengthPosition +
                                       16:].split(b'\r')[0]
                 totalBytes += int(contentLength.decode())
@@ -207,7 +211,6 @@ def proxy_server(webserver, port, connection, data, imgSub, attack, hashmap):
         serverSocket.close()
         connection.close()
     except Exception as err:
-        print("ERROR: Could not forward request or reply", err)
         serverSocket.close()
         connection.close()
         sys.exit(1)
